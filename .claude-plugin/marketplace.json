@@ -1,0 +1,21 @@
+{
+  "name": "my-marketplace",
+  "metadata": {
+    "description": "Plugin marketplace for Claude Code and opencode",
+    "version": "0.1.0"
+  },
+  "owner": {
+    "name": "kimtaejun",
+    "url": "https://github.com/kimtaejun"
+  },
+  "homepage": "https://github.com/kimtaejun/my-marketplace",
+  "plugins": [
+    {
+      "name": "codex",
+      "source": "./plugins/codex",
+      "description": "Compile and decompile between CLAUDE.md (source) and code (binary)",
+      "category": "workflow",
+      "tags": ["compile", "decompile", "claude-md", "codex"]
+    }
+  ]
+}
