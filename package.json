@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kimtaejun/my-marketplace.git"
+    "url": "git+https://github.com/rlaxowns7916/opencode-marketplace-bridge-cli.git"
   },
   "main": "bin/cli.js",
-  "homepage": "https://github.com/kimtaejun/my-marketplace#readme",
+  "homepage": "https://github.com/rlaxowns7916/opencode-marketplace-bridge-cli#readme",
   "bugs": {
-    "url": "https://github.com/kimtaejun/my-marketplace/issues"
+    "url": "https://github.com/rlaxowns7916/opencode-marketplace-bridge-cli/issues"
   },
   "engines": {
     "node": ">=18.0.0"
