@@ -35,8 +35,6 @@
   ],
   "files": [
     "bin/",
-    "RELEASING.md",
-    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
