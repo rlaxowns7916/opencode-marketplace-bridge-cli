@@ -1,0 +1,9 @@
+{
+  "name": "ombc-fixture",
+  "plugins": [
+    {
+      "name": "ombc-fixture",
+      "source": "./"
+    }
+  ]
+}

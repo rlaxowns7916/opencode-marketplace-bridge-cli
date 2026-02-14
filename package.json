@@ -1,22 +1,49 @@
 {
-  "name": "my-marketplace",
+  "name": "opencode-marketplace-bridge-cli",
   "version": "0.1.0",
-  "description": "Plugin marketplace for Claude Code and opencode",
+  "description": "Bridge CLI that installs Claude Code marketplace plugins into OpenCode discovery paths",
   "author": "kimtaejun",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kimtaejun/my-marketplace"
+    "url": "git+https://github.com/kimtaejun/my-marketplace.git"
+  },
+  "main": "bin/cli.js",
+  "homepage": "https://github.com/kimtaejun/my-marketplace#readme",
+  "bugs": {
+    "url": "https://github.com/kimtaejun/my-marketplace/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test",
+    "pack:check": "npm pack --dry-run",
+    "release:check": "npm test && npm run pack:check && npm publish --dry-run",
+    "prepublishOnly": "npm test"
+  },
+  "bin": {
+    "ombc": "bin/cli.js"
   },
   "keywords": [
     "claude-code",
     "opencode",
     "marketplace",
-    "plugins"
+    "plugin",
+    "bridge",
+    "cli"
   ],
   "files": [
-    "plugins/",
-    ".opencode/",
-    ".claude-plugin/"
-  ]
+    "bin/",
+    "RELEASING.md",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "simple-git": "^3.27.0"
+  }
 }
