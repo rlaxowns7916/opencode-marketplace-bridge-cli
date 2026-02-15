@@ -13,6 +13,8 @@ const {
   filterMdContent,
   findReferencedDirs,
   findOpencodePluginReferencedDirs,
+  extractFileReferences,
+  buildDependencyGraph,
   transformContent,
   readMarkerOwner,
   writeMarker,
@@ -449,6 +451,33 @@ test("findReferencedDirs ignores .opencode/plugins references", () => {
   }
 });
 
+test("findReferencedDirs includes plugins/ dir when referenced", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+    fs.mkdirSync(
+      path.join(tmpDir, "plugins", "spec-driven-roundtrip-engine", "rules"),
+      { recursive: true },
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      [
+        "Read rules/common/review.md first.",
+        "@plugins/spec-driven-roundtrip-engine/rules/boundary-definition.md",
+        "@plugins/spec-driven-roundtrip-engine/rules/operational-rules.md",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const dirs = findReferencedDirs(tmpDir);
+    assert.deepEqual(dirs.sort(), ["plugins", "rules"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 test("findOpencodePluginReferencedDirs finds .opencode plugin bundle refs", () => {
   const tmpDir = makeTempDir();
   try {
@@ -502,6 +531,29 @@ test("findOpencodePluginReferencedDirs deduplicates and sorts by bundle/dir", ()
   }
 });
 
+test("findOpencodePluginReferencedDirs finds bare plugins/ refs without .opencode prefix", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      [
+        "Read rules/common/review.md first.",
+        "@plugins/spec-driven-roundtrip-engine/rules/boundary-definition.md",
+        "@plugins/spec-driven-roundtrip-engine/rules/operational-rules.md",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const refs = findOpencodePluginReferencedDirs(tmpDir);
+    assert.deepEqual(refs, [{ bundle: "spec-driven-roundtrip-engine", dir: "rules" }]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 test("findOpencodePluginReferencedDirs includes bundled-only refs without top-level dir", () => {
   const tmpDir = makeTempDir();
   try {
@@ -533,6 +585,23 @@ test("transformContent applies tools normalization and model normalization", () 
   assert.match(result, /tools:\n {2}read: true\n {2}grep: true/);
   // No path rewriting — content preserved as-is
   assert.match(result, /Read rules\/common\/test\.md for review\./);
+});
+
+test("transformContent rewrites relative paths with rewriteCtx", () => {
+  const input = [
+    "Read rules/common/review.md first.",
+    "Check templates/pr.md too.",
+    "Already rewritten: .opencode/my-plugin/rules/file.md",
+  ].join("\n");
+  const result = transformContent(input, {
+    pluginSourceNorm: "",
+    pluginName: "my-plugin",
+    copiedDirs: ["rules", "templates"],
+  });
+  assert.match(result, /\.opencode\/my-plugin\/rules\/common\/review\.md/);
+  assert.match(result, /\.opencode\/my-plugin\/templates\/pr\.md/);
+  // No double rewriting
+  assert.doesNotMatch(result, /\.opencode\/my-plugin\/\.opencode\//);
 });
 
 // --- parseMarketplace ---
@@ -591,7 +660,7 @@ test("parseMarketplace throws for missing plugins array", () => {
 
 // --- install: place-at-source ---
 
-test("install places referenced dirs at source path and creates skills", async () => {
+test("install places referenced files in .opencode/<pluginName>/ and creates skills", async () => {
   const tmpDir = makeTempDir();
   const projectRoot = path.join(tmpDir, "project");
   fs.mkdirSync(projectRoot, { recursive: true });
@@ -599,12 +668,12 @@ test("install places referenced dirs at source path and creates skills", async (
   try {
     await install(fixtureRoot, null, projectRoot);
 
-    // Rules placed at project root (source is "./")
-    const ruleFile = path.join(projectRoot, "rules", "common", "review-baseline.md");
+    // Rules placed at .opencode/<pluginName>/
+    const ruleFile = path.join(projectRoot, ".opencode", "ombc-fixture", "rules", "common", "review-baseline.md");
     assert.equal(fs.existsSync(ruleFile), true);
 
-    // Marker exists on placed dir
-    const placedMarker = path.join(projectRoot, "rules", ".ombc-managed");
+    // Marker exists at .opencode/<pluginName>/
+    const placedMarker = path.join(projectRoot, ".opencode", "ombc-fixture", ".ombc-managed");
     assert.equal(fs.existsSync(placedMarker), true);
 
     // No cache directory created
@@ -612,6 +681,9 @@ test("install places referenced dirs at source path and creates skills", async (
       fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "cache")),
       false,
     );
+
+    // No rules at project root
+    assert.equal(fs.existsSync(path.join(projectRoot, "rules")), false);
 
     // Skills created
     const codeReviewSkill = path.join(
@@ -623,10 +695,9 @@ test("install places referenced dirs at source path and creates skills", async (
     assert.equal(fs.existsSync(codeReviewSkill), true);
     assert.equal(fs.existsSync(prCreateSkill), true);
 
-    // Skill content NOT rewritten — no cache paths
+    // Skill content rewritten with .opencode/<pluginName>/ prefix
     const skillContent = fs.readFileSync(codeReviewSkill, "utf8");
-    assert.doesNotMatch(skillContent, /\.opencode\/plugins\/cache/);
-    assert.match(skillContent, /rules\/common\/review-baseline\.md/);
+    assert.match(skillContent, /\.opencode\/ombc-fixture\/rules\/common\/review-baseline\.md/);
 
     // Skill markers created
     const marker = path.join(
@@ -642,7 +713,7 @@ test("install places referenced dirs at source path and creates skills", async (
     assert.deepEqual(entry.skills, ["code-review", "pr-create"]);
     assert.deepEqual(entry.commands, []);
     assert.deepEqual(entry.agents, []);
-    assert.deepEqual(entry.placedDirs, ["rules"]);
+    assert.deepEqual(entry.placedDirs, [".opencode/ombc-fixture"]);
     assert.equal(entry.cacheDir, undefined);
   } finally {
     cleanup(tmpDir);
@@ -663,10 +734,9 @@ test("install with plugin filter installs only specified plugin", async () => {
     );
     assert.equal(fs.existsSync(skillPath), true);
 
-    // Content preserved without cache path rewriting
+    // Content rewritten with .opencode/<pluginName>/ prefix
     const content = fs.readFileSync(skillPath, "utf8");
-    assert.doesNotMatch(content, /\.opencode\/plugins\/cache/);
-    assert.match(content, /rules\/common\/test-rule\.md/);
+    assert.match(content, /\.opencode\/mock-plugin\/rules\/common\/test-rule\.md/);
   } finally {
     cleanup(tmpDir);
   }
@@ -777,7 +847,7 @@ test("install clones GitHub shorthand source and cleans temporary clone dir", as
     );
 
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", "common", "review-baseline.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "ombc-fixture", "rules", "common", "review-baseline.md")),
       true,
     );
     assert.equal(fs.existsSync(clonedTmpDir), false);
@@ -816,7 +886,7 @@ test("install reports clone failure and removes temporary clone dir", async () =
 
 // --- install commands and agents ---
 
-test("install copies commands without path rewriting", async () => {
+test("install copies commands with path rewriting", async () => {
   const tmpDir = makeTempDir();
   const marketplaceDir = createMockMarketplace(tmpDir, {
     commands: {
@@ -836,10 +906,9 @@ test("install copies commands without path rewriting", async () => {
     assert.equal(fs.existsSync(reviewCmd), true);
     assert.equal(fs.existsSync(deployCmd), true);
 
-    // Content preserved — no cache path rewriting
+    // Content rewritten with .opencode/<pluginName>/ prefix
     const content = fs.readFileSync(reviewCmd, "utf8");
-    assert.doesNotMatch(content, /\.opencode\/plugins\/cache/);
-    assert.match(content, /rules\/common\/test-rule\.md/);
+    assert.match(content, /\.opencode\/mock-plugin\/rules\/common\/test-rule\.md/);
 
     // Registry tracks commands
     const registry = readRegistry(projectRoot);
@@ -850,7 +919,7 @@ test("install copies commands without path rewriting", async () => {
   }
 });
 
-test("install copies agents without path rewriting", async () => {
+test("install copies agents with path rewriting", async () => {
   const tmpDir = makeTempDir();
   const marketplaceDir = createMockMarketplace(tmpDir, {
     agents: {
@@ -867,10 +936,9 @@ test("install copies agents without path rewriting", async () => {
     const agentFile = path.join(projectRoot, ".opencode", "agents", "reviewer.md");
     assert.equal(fs.existsSync(agentFile), true);
 
-    // Content preserved — no cache path rewriting
+    // Content rewritten with .opencode/<pluginName>/ prefix
     const content = fs.readFileSync(agentFile, "utf8");
-    assert.doesNotMatch(content, /\.opencode\/plugins\/cache/);
-    assert.match(content, /rules\/common\/test-rule\.md/);
+    assert.match(content, /\.opencode\/mock-plugin\/rules\/common\/test-rule\.md/);
 
     // Registry tracks agents
     const registry = readRegistry(projectRoot);
@@ -944,7 +1012,7 @@ test("install handles duplicate command/agent names across plugins in same marke
   }
 });
 
-test("install places only referenced directories at source path", async () => {
+test("install copies only referenced files to .opencode/<pluginName>/", async () => {
   const tmpDir = makeTempDir();
   const marketplaceDir = path.join(tmpDir, "smart-mp");
   fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
@@ -975,38 +1043,30 @@ test("install places only referenced directories at source path", async () => {
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    // Referenced dirs placed at project root
-    assert.equal(fs.existsSync(path.join(projectRoot, "rules", "common", "test.md")), true);
-    assert.equal(fs.existsSync(path.join(projectRoot, "templates", "pr.md")), true);
+    // Referenced files placed at .opencode/<pluginName>/
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "smart-mp", "rules", "common", "test.md")), true);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "smart-mp", "templates", "pr.md")), true);
 
-    // Markers on placed dirs
-    assert.equal(fs.existsSync(path.join(projectRoot, "rules", ".ombc-managed")), true);
-    assert.equal(fs.existsSync(path.join(projectRoot, "templates", ".ombc-managed")), true);
+    // Marker at .opencode/<pluginName>/
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "smart-mp", ".ombc-managed")), true);
 
     // Unreferenced dirs/files NOT placed
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "smart-mp", "docs")), false);
     assert.equal(fs.existsSync(path.join(projectRoot, "docs")), false);
     assert.equal(fs.existsSync(path.join(projectRoot, "package.json")), false);
-    assert.equal(fs.existsSync(path.join(projectRoot, "LICENSE")), false);
 
-    // No cache directory
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "cache")),
-      false,
-    );
-
-    // Skills installed with original paths (no rewriting)
+    // Skills installed with rewritten paths
     const skillContent = fs.readFileSync(
       path.join(projectRoot, ".opencode", "skills", "review", "SKILL.md"),
       "utf8",
     );
-    assert.doesNotMatch(skillContent, /\.opencode\/plugins\/cache/);
-    assert.match(skillContent, /rules\/common\/test\.md/);
-    assert.match(skillContent, /templates\/pr\.md/);
+    assert.match(skillContent, /\.opencode\/smart-mp\/rules\/common\/test\.md/);
+    assert.match(skillContent, /\.opencode\/smart-mp\/templates\/pr\.md/);
 
     // Registry has placedDirs
     const registry = readRegistry(projectRoot);
     const entry = registry.installations["smart-mp"];
-    assert.deepEqual(entry.placedDirs.sort(), ["rules", "templates"]);
+    assert.deepEqual(entry.placedDirs, [".opencode/smart-mp"]);
     assert.equal(entry.cacheDir, undefined);
   } finally {
     cleanup(tmpDir);
@@ -1050,9 +1110,9 @@ test("install supports referenced directory symlink inside marketplace root", as
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    assert.equal(fs.existsSync(path.join(projectRoot, "rules", "common", "test.md")), true);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "symlink-rules-mp", "rules", "common", "test.md")), true);
     const registry = readRegistry(projectRoot);
-    assert.deepEqual(registry.installations["symlink-rules-mp"].placedDirs, ["rules"]);
+    assert.deepEqual(registry.installations["symlink-rules-mp"].placedDirs, [".opencode/symlink-rules-mp"]);
   } finally {
     cleanup(tmpDir);
   }
@@ -1092,7 +1152,7 @@ test("install copies symlinked files inside referenced directories", async () =>
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    const copiedPath = path.join(projectRoot, "rules", "common", "test.md");
+    const copiedPath = path.join(projectRoot, ".opencode", "symlink-rule-file-mp", "rules", "common", "test.md");
     assert.equal(fs.existsSync(copiedPath), true);
     assert.equal(fs.readFileSync(copiedPath, "utf8"), "linked rule");
   } finally {
@@ -1133,7 +1193,7 @@ test("install rejects referenced directory symlink that escapes marketplace root
       { message: /Symbolic link escapes/ },
     );
 
-    assert.equal(fs.existsSync(path.join(projectRoot, "rules", "common", "test.md")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "symlink-escape-rules-mp", "rules", "common", "test.md")), false);
     assert.equal("symlink-escape-rules-mp" in readRegistry(projectRoot).installations, false);
   } finally {
     cleanup(tmpDir);
@@ -1172,37 +1232,33 @@ test("install with nested plugin source places dirs at nested path", async () =>
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    // Rules placed at nested path: plugins/my-plugin/rules/
-    const ruleFile = path.join(projectRoot, "plugins", "my-plugin", "rules", "common", "test.md");
+    // Rules placed at .opencode/<pluginName>/
+    const ruleFile = path.join(projectRoot, ".opencode", "my-plugin", "rules", "common", "test.md");
     assert.equal(fs.existsSync(ruleFile), true);
 
-    // Marker on placed dir
-    const placedMarker = path.join(projectRoot, "plugins", "my-plugin", "rules", ".ombc-managed");
+    // Marker at .opencode/<pluginName>/
+    const placedMarker = path.join(projectRoot, ".opencode", "my-plugin", ".ombc-managed");
     assert.equal(fs.existsSync(placedMarker), true);
 
     // Skills installed
     const skillPath = path.join(projectRoot, ".opencode", "skills", "review", "SKILL.md");
     assert.equal(fs.existsSync(skillPath), true);
 
-    // Registry has nested placedDirs
+    // Registry has .opencode/<pluginName> as placedDirs
     const registry = readRegistry(projectRoot);
     const entry = registry.installations["nested-mp"];
-    assert.deepEqual(entry.placedDirs, [path.join("plugins", "my-plugin", "rules")]);
+    assert.deepEqual(entry.placedDirs, [".opencode/my-plugin"]);
   } finally {
     cleanup(tmpDir);
   }
 });
 
-test("install does not create repository root plugins dir from .opencode references", async () => {
+test("install normalizes .opencode/plugins/ refs to plugin-root-relative paths", async () => {
   const tmpDir = makeTempDir();
   const marketplaceDir = path.join(tmpDir, "opencode-ref-mp");
   fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
   fs.mkdirSync(path.join(marketplaceDir, "skills", "review"), { recursive: true });
   fs.mkdirSync(path.join(marketplaceDir, "rules", "common"), { recursive: true });
-  fs.mkdirSync(
-    path.join(marketplaceDir, "plugins", "spec-driven-roundtrip-engine", "rules"),
-    { recursive: true },
-  );
 
   fs.writeFileSync(
     path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
@@ -1222,11 +1278,6 @@ test("install does not create repository root plugins dir from .opencode referen
     "utf8",
   );
   fs.writeFileSync(path.join(marketplaceDir, "rules", "common", "review.md"), "rule", "utf8");
-  fs.writeFileSync(
-    path.join(marketplaceDir, "plugins", "spec-driven-roundtrip-engine", "rules", "boundary-definition.md"),
-    "plugin rule",
-    "utf8",
-  );
 
   const projectRoot = path.join(tmpDir, "project");
   fs.mkdirSync(projectRoot, { recursive: true });
@@ -1234,113 +1285,18 @@ test("install does not create repository root plugins dir from .opencode referen
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    assert.equal(fs.existsSync(path.join(projectRoot, "rules", "common", "review.md")), true);
-    assert.equal(fs.existsSync(path.join(projectRoot, "plugins")), false);
+    // Referenced file copied to .opencode/<pluginName>/
     assert.equal(
-      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "spec-driven-roundtrip-engine", "rules", "boundary-definition.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "opencode-ref-mp", "rules", "common", "review.md")),
       true,
     );
+    // No repository root plugins dir
+    assert.equal(fs.existsSync(path.join(projectRoot, "plugins")), false);
+    // No root-level rules dir
+    assert.equal(fs.existsSync(path.join(projectRoot, "rules")), false);
 
     const registry = readRegistry(projectRoot);
-    const placedDirs = registry.installations["opencode-ref-mp"].placedDirs.sort();
-    assert.deepEqual(placedDirs, [
-      path.join(".opencode", "plugins", "spec-driven-roundtrip-engine", "rules"),
-      "rules",
-    ]);
-  } finally {
-    cleanup(tmpDir);
-  }
-});
-
-test("install places .opencode plugin refs using top-level fallback dir", async () => {
-  const tmpDir = makeTempDir();
-  const marketplaceDir = path.join(tmpDir, "opencode-fallback-mp");
-  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
-  fs.mkdirSync(path.join(marketplaceDir, "skills", "review"), { recursive: true });
-  fs.mkdirSync(path.join(marketplaceDir, "rules", "common"), { recursive: true });
-
-  fs.writeFileSync(
-    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
-    JSON.stringify({
-      name: "opencode-fallback-mp",
-      plugins: [{ name: "opencode-fallback-mp", source: "./" }],
-    }),
-    "utf8",
-  );
-
-  fs.writeFileSync(
-    path.join(marketplaceDir, "skills", "review", "SKILL.md"),
-    "@.opencode/plugins/spec-driven-roundtrip-engine/rules/boundary-definition.md",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(marketplaceDir, "rules", "common", "boundary-definition.md"),
-    "fallback rule",
-    "utf8",
-  );
-
-  const projectRoot = path.join(tmpDir, "project");
-  fs.mkdirSync(projectRoot, { recursive: true });
-
-  try {
-    await install(marketplaceDir, null, projectRoot);
-
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "spec-driven-roundtrip-engine", "rules", "common", "boundary-definition.md")),
-      true,
-    );
-    assert.equal(fs.existsSync(path.join(projectRoot, "plugins")), false);
-  } finally {
-    cleanup(tmpDir);
-  }
-});
-
-test("install places .opencode plugin refs from bundled-only plugin dirs", async () => {
-  const tmpDir = makeTempDir();
-  const marketplaceDir = path.join(tmpDir, "opencode-bundled-only-mp");
-  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
-  fs.mkdirSync(path.join(marketplaceDir, "skills", "review"), { recursive: true });
-  fs.mkdirSync(
-    path.join(marketplaceDir, "plugins", "spec-driven-roundtrip-engine", "rules", "common"),
-    { recursive: true },
-  );
-
-  fs.writeFileSync(
-    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
-    JSON.stringify({
-      name: "opencode-bundled-only-mp",
-      plugins: [{ name: "opencode-bundled-only-mp", source: "./" }],
-    }),
-    "utf8",
-  );
-
-  fs.writeFileSync(
-    path.join(marketplaceDir, "skills", "review", "SKILL.md"),
-    "@.opencode/plugins/spec-driven-roundtrip-engine/rules/common/boundary-definition.md",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(marketplaceDir, "plugins", "spec-driven-roundtrip-engine", "rules", "common", "boundary-definition.md"),
-    "bundled-only rule",
-    "utf8",
-  );
-
-  const projectRoot = path.join(tmpDir, "project");
-  fs.mkdirSync(projectRoot, { recursive: true });
-
-  try {
-    await install(marketplaceDir, null, projectRoot);
-
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "spec-driven-roundtrip-engine", "rules", "common", "boundary-definition.md")),
-      true,
-    );
-    assert.equal(fs.existsSync(path.join(projectRoot, "plugins")), false);
-
-    const registry = readRegistry(projectRoot);
-    assert.deepEqual(registry.installations["opencode-bundled-only-mp"].placedDirs, [
-      path.join(".opencode", "plugins", "spec-driven-roundtrip-engine", "rules"),
-    ]);
+    assert.deepEqual(registry.installations["opencode-ref-mp"].placedDirs, [".opencode/opencode-ref-mp"]);
   } finally {
     cleanup(tmpDir);
   }
@@ -1473,9 +1429,9 @@ test("install with skills + commands + agents together", async () => {
       true,
     );
 
-    // Rules placed at source path (not in cache)
+    // Rules placed at .opencode/<pluginName>/
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", "common", "test-rule.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "mock-plugin", "rules", "common", "test-rule.md")),
       true,
     );
 
@@ -1491,7 +1447,7 @@ test("install with skills + commands + agents together", async () => {
     assert.deepEqual(entry.skills, ["test-skill"]);
     assert.deepEqual(entry.commands, ["hello"]);
     assert.deepEqual(entry.agents, ["oracle"]);
-    assert.deepEqual(entry.placedDirs, ["rules"]);
+    assert.deepEqual(entry.placedDirs, [".opencode/mock-plugin"]);
     assert.equal(entry.cacheDir, undefined);
   } finally {
     cleanup(tmpDir);
@@ -1527,7 +1483,7 @@ test("install is idempotent — reinstall replaces placed dirs and files", async
 
     // Placed dirs still exist
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", "common", "review-baseline.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "ombc-fixture", "rules", "common", "review-baseline.md")),
       true,
     );
   } finally {
@@ -1700,9 +1656,9 @@ test("uninstall removes skills, commands, agents, placed dirs, and registry entr
       false,
     );
 
-    // Placed dirs removed
+    // Placed dirs removed (.opencode/<pluginName>/)
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "mock-plugin")),
       false,
     );
 
@@ -1748,7 +1704,7 @@ test("uninstall cleans up nested placed dirs and empty parents", async () => {
 
     // Verify placed
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "plugins", "my-plugin", "rules", "common", "test.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "my-plugin", "rules", "common", "test.md")),
       true,
     );
 
@@ -1756,17 +1712,7 @@ test("uninstall cleans up nested placed dirs and empty parents", async () => {
 
     // Placed dirs removed
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "plugins", "my-plugin", "rules")),
-      false,
-    );
-
-    // Empty parent directories cleaned up
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, "plugins", "my-plugin")),
-      false,
-    );
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, "plugins")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "my-plugin")),
       false,
     );
   } finally {
@@ -1854,18 +1800,18 @@ test("uninstall cleans up legacy cache from previous version", async () => {
   }
 });
 
-test("uninstall removes old-style .opencode/<plugin>/rules bundle dirs", () => {
+test("uninstall removes .opencode/<plugin>/ via placedDirs", () => {
   const tmpDir = makeTempDir();
   const projectRoot = path.join(tmpDir, "project");
   fs.mkdirSync(projectRoot, { recursive: true });
 
   try {
     const opencodeDir = path.join(projectRoot, ".opencode");
-    fs.mkdirSync(opencodeDir, { recursive: true });
-
-    const legacyBundleRules = path.join(opencodeDir, "old-plugin", "rules", "common");
-    fs.mkdirSync(legacyBundleRules, { recursive: true });
-    fs.writeFileSync(path.join(legacyBundleRules, "old-rule.md"), "legacy rule", "utf8");
+    const pluginDir = path.join(opencodeDir, "old-plugin");
+    const rulesDir = path.join(pluginDir, "rules", "common");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "old-rule.md"), "legacy rule", "utf8");
+    fs.writeFileSync(path.join(pluginDir, ".ombc-managed"), "old-mp\n", "utf8");
 
     writeRegistry(projectRoot, {
       installations: {
@@ -1875,14 +1821,13 @@ test("uninstall removes old-style .opencode/<plugin>/rules bundle dirs", () => {
           skills: [],
           commands: [],
           agents: [],
-          placedDirs: [],
+          placedDirs: [".opencode/old-plugin"],
         },
       },
     });
 
     uninstall("old-mp", projectRoot);
 
-    assert.equal(fs.existsSync(path.join(opencodeDir, "old-plugin", "rules")), false);
     assert.equal(fs.existsSync(path.join(opencodeDir, "old-plugin")), false);
   } finally {
     cleanup(tmpDir);
@@ -1925,16 +1870,16 @@ test("install cleans up legacy cache from previous version on reinstall", async 
     // Legacy cache removed
     assert.equal(fs.existsSync(legacyCacheDir), false);
 
-    // New placement at source path
+    // New placement at .opencode/<pluginName>/
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", "common", "test-rule.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "mock-plugin", "rules", "common", "test-rule.md")),
       true,
     );
 
     // Registry updated with placedDirs, no cacheDir
     const updatedRegistry = readRegistry(projectRoot);
     const entry = updatedRegistry.installations["mock-marketplace"];
-    assert.deepEqual(entry.placedDirs, ["rules"]);
+    assert.deepEqual(entry.placedDirs, [".opencode/mock-plugin"]);
     assert.equal(entry.cacheDir, undefined);
   } finally {
     cleanup(tmpDir);
@@ -2019,17 +1964,14 @@ test("CLI install from local path works end-to-end", () => {
       true,
     );
 
-    // Rules placed at source path (not in cache)
+    // Rules placed at .opencode/<pluginName>/
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", "common", "review-baseline.md")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "ombc-fixture", "rules", "common", "review-baseline.md")),
       true,
     );
 
-    // No cache directory
-    assert.equal(
-      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "cache")),
-      false,
-    );
+    // No rules at project root
+    assert.equal(fs.existsSync(path.join(projectRoot, "rules")), false);
 
     // Registry exists
     assert.equal(
@@ -2094,7 +2036,7 @@ test("CLI uninstall works end-to-end", () => {
 
     // Placed dirs removed
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "ombc-fixture")),
       false,
     );
   } finally {
@@ -2139,7 +2081,7 @@ test("CLI install with non-existent local path shows error", () => {
 
 // --- Mock marketplace full tests ---
 
-test("install from mock marketplace places rules at source path", async () => {
+test("install from mock marketplace places rules at .opencode/<pluginName>/", async () => {
   const tmpDir = makeTempDir();
   const marketplaceDir = createMockMarketplace(tmpDir);
   const projectRoot = path.join(tmpDir, "project");
@@ -2148,29 +2090,31 @@ test("install from mock marketplace places rules at source path", async () => {
   try {
     await install(marketplaceDir, null, projectRoot);
 
-    // Skill installed with original paths (no rewriting)
+    // Skill installed with rewritten paths
     const skillPath = path.join(
       projectRoot, ".opencode", "skills", "test-skill", "SKILL.md",
     );
     const content = fs.readFileSync(skillPath, "utf8");
-    assert.doesNotMatch(content, /\.opencode\/plugins\/cache/);
-    assert.match(content, /rules\/common\/test-rule\.md/);
+    assert.match(content, /\.opencode\/mock-plugin\/rules\/common\/test-rule\.md/);
 
-    // Rules placed at project root
-    const ruleFile = path.join(projectRoot, "rules", "common", "test-rule.md");
+    // Rules placed at .opencode/<pluginName>/
+    const ruleFile = path.join(projectRoot, ".opencode", "mock-plugin", "rules", "common", "test-rule.md");
     assert.equal(fs.existsSync(ruleFile), true);
 
-    // Marker on placed dir
+    // Marker at .opencode/<pluginName>/
     assert.equal(
-      fs.existsSync(path.join(projectRoot, "rules", ".ombc-managed")),
+      fs.existsSync(path.join(projectRoot, ".opencode", "mock-plugin", ".ombc-managed")),
       true,
     );
+
+    // No rules at project root
+    assert.equal(fs.existsSync(path.join(projectRoot, "rules")), false);
 
     // Registry uses marketplace name as key with placedDirs
     const registry = readRegistry(projectRoot);
     assert.equal("mock-marketplace" in registry.installations, true);
     assert.deepEqual(registry.installations["mock-marketplace"].plugins, ["mock-plugin"]);
-    assert.deepEqual(registry.installations["mock-marketplace"].placedDirs, ["rules"]);
+    assert.deepEqual(registry.installations["mock-marketplace"].placedDirs, [".opencode/mock-plugin"]);
     assert.equal(registry.installations["mock-marketplace"].cacheDir, undefined);
   } finally {
     cleanup(tmpDir);
@@ -2485,4 +2429,382 @@ test("CLI help shows --force option", () => {
   const run = spawnSync(process.execPath, [cliPath, "--help"], { encoding: "utf8" });
   assert.equal(run.status, 0);
   assert.match(run.stdout, /--force/);
+});
+
+// --- extractFileReferences ---
+
+test("extractFileReferences extracts bare dir/file references", () => {
+  const content = "Read `rules/common/review.md` and `templates/pr.md`.";
+  const refs = extractFileReferences(content, ["rules", "templates"]);
+  assert.deepEqual(refs.sort(), ["rules/common/review.md", "templates/pr.md"]);
+});
+
+test("extractFileReferences strips .opencode/<pluginName>/ prefix", () => {
+  const content = "Read `.opencode/my-plugin/rules/common/review.md` first.";
+  const refs = extractFileReferences(content, ["rules"]);
+  assert.deepEqual(refs, ["rules/common/review.md"]);
+});
+
+test("extractFileReferences strips plugins/<bundle>/ prefix", () => {
+  const content = "@plugins/spec-driven-roundtrip-engine/rules/boundary.md";
+  const refs = extractFileReferences(content, ["rules"]);
+  assert.deepEqual(refs, ["rules/boundary.md"]);
+});
+
+test("extractFileReferences strips .opencode/plugins/<bundle>/ prefix", () => {
+  const content = "@.opencode/plugins/spec-driven-roundtrip-engine/rules/boundary.md";
+  const refs = extractFileReferences(content, ["rules"]);
+  assert.deepEqual(refs, ["rules/boundary.md"]);
+});
+
+test("extractFileReferences deduplicates results", () => {
+  const content = [
+    "Read rules/common/review.md first.",
+    "Then re-read rules/common/review.md again.",
+  ].join("\n");
+  const refs = extractFileReferences(content, ["rules"]);
+  assert.deepEqual(refs, ["rules/common/review.md"]);
+});
+
+test("extractFileReferences ignores unknown dirs", () => {
+  const content = "Read unknown/file.md and rules/common/review.md.";
+  const refs = extractFileReferences(content, ["rules"]);
+  assert.deepEqual(refs, ["rules/common/review.md"]);
+});
+
+// --- buildDependencyGraph ---
+
+test("buildDependencyGraph finds direct file references", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read `rules/common/review.md` first.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "review.md"), "rule content", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/review.md"), true);
+    assert.equal(reachableDirs.has("rules"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph follows N-depth references", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "templates"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read `rules/common/review.md` first.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "rules", "common", "review.md"),
+      "See `templates/checklist.md` for details.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "templates", "checklist.md"),
+      "Checklist content",
+      "utf8",
+    );
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/review.md"), true);
+    assert.equal(reachableFiles.has("templates/checklist.md"), true);
+    assert.equal(reachableDirs.has("rules"), true);
+    assert.equal(reachableDirs.has("templates"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph handles cycles without infinite loop", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "templates"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read `rules/common/a.md` first.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "rules", "common", "a.md"),
+      "See `templates/b.md` for more.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "templates", "b.md"),
+      "Back to `rules/common/a.md` again.",
+      "utf8",
+    );
+
+    const { reachableFiles } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/a.md"), true);
+    assert.equal(reachableFiles.has("templates/b.md"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph excludes unreferenced files", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "docs"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read `rules/common/review.md` first.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "review.md"), "rule", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "unused.md"), "unused", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "docs", "guide.md"), "guide", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/review.md"), true);
+    assert.equal(reachableFiles.has("rules/common/unused.md"), false);
+    assert.equal(reachableFiles.has("docs/guide.md"), false);
+    assert.equal(reachableDirs.has("docs"), false);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph handles directory references", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read all files in `rules/common/` directory.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "a.md"), "rule a", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "b.md"), "rule b", "utf8");
+
+    const { reachableFiles } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/a.md"), true);
+    assert.equal(reachableFiles.has("rules/common/b.md"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+// --- Recursive reference + selective copy integration ---
+
+test("install recursively tracks references and copies only reachable files", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "recursive-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "skills", "review"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "rules", "common"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "templates"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "docs"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "recursive-mp", plugins: [{ name: "recursive-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "skills", "review", "SKILL.md"),
+    "Read `rules/common/review.md` first.",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "rules", "common", "review.md"),
+    "See `templates/checklist.md` for details.",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "templates", "checklist.md"), "checklist", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "templates", "unused.md"), "unused template", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "docs", "readme.md"), "docs", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const base = path.join(projectRoot, ".opencode", "recursive-mp");
+
+    // Recursively referenced files copied
+    assert.equal(fs.existsSync(path.join(base, "rules", "common", "review.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "templates", "checklist.md")), true);
+
+    // Unreferenced files NOT copied
+    assert.equal(fs.existsSync(path.join(base, "templates", "unused.md")), false);
+    assert.equal(fs.existsSync(path.join(base, "docs")), false);
+
+    // Content paths rewritten in copied files
+    const reviewContent = fs.readFileSync(path.join(base, "rules", "common", "review.md"), "utf8");
+    assert.match(reviewContent, /\.opencode\/recursive-mp\/templates\/checklist\.md/);
+
+    // Skill paths rewritten
+    const skillContent = fs.readFileSync(
+      path.join(projectRoot, ".opencode", "skills", "review", "SKILL.md"),
+      "utf8",
+    );
+    assert.match(skillContent, /\.opencode\/recursive-mp\/rules\/common\/review\.md/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+// --- filterMdContent edge cases ---
+
+test("filterMdContent filters multi-hash headings", () => {
+  const input = [
+    "normal line with rules/file.md reference",
+    "# H1 heading with rules/a.md",
+    "## H2 heading with rules/b.md",
+    "### H3 heading with rules/c.md",
+    "#### H4 heading with rules/d.md",
+    "another normal line with rules/e.md",
+  ].join("\n");
+  const result = filterMdContent(input);
+  assert.match(result, /rules\/file\.md/);
+  assert.match(result, /rules\/e\.md/);
+  assert.doesNotMatch(result, /rules\/a\.md/);
+  assert.doesNotMatch(result, /rules\/b\.md/);
+  assert.doesNotMatch(result, /rules\/c\.md/);
+  assert.doesNotMatch(result, /rules\/d\.md/);
+});
+
+test("filterMdContent handles nested code fences", () => {
+  const input = [
+    "outside before",
+    "````markdown",
+    "inner content should be filtered",
+    "```bash",
+    "npx test tests/something.ts",
+    "```",
+    "still inside outer fence rules/leaked.md",
+    "````",
+    "outside after with rules/visible.md",
+  ].join("\n");
+  const result = filterMdContent(input);
+  assert.match(result, /outside before/);
+  assert.match(result, /rules\/visible\.md/);
+  assert.doesNotMatch(result, /tests\/something/);
+  assert.doesNotMatch(result, /rules\/leaked\.md/);
+  assert.doesNotMatch(result, /inner content/);
+});
+
+// --- copyReachableFiles edge case ---
+
+test("install with zero reachable files records empty placedDirs", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "empty-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "skills", "hello"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "empty-mp", plugins: [{ name: "empty-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "skills", "hello", "SKILL.md"),
+    "A simple skill with no external file references.",
+    "utf8",
+  );
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    // Skill installed
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "skills", "hello", "SKILL.md")),
+      true,
+    );
+
+    // No .opencode/<pluginName>/ directory created
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "empty-mp")),
+      false,
+    );
+
+    // Registry records empty placedDirs
+    const registry = readRegistry(projectRoot);
+    assert.deepEqual(registry.installations["empty-mp"].placedDirs, []);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+// --- source "./" with no reachable content dirs integration ---
+
+test("install source ./ marketplace with code-block-only refs copies nothing extra", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "codeblock-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "commands"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "rules"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "codeblock-mp", plugins: [{ name: "codeblock-mp", source: "./" }] }),
+    "utf8",
+  );
+  // Command references scripts/ only inside a code block
+  fs.writeFileSync(
+    path.join(marketplaceDir, "commands", "setup.md"),
+    [
+      "Run the setup command:",
+      "```bash",
+      "node scripts/setup.js --init",
+      "```",
+      "Done.",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "scripts", "setup.js"), "console.log('hi')", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "rules", "style.md"), "style guide", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    // Command installed
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "commands", "setup.md")),
+      true,
+    );
+
+    // No content dirs copied (refs were in code blocks)
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "codeblock-mp")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, "scripts")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, "rules")), false);
+
+    // Registry
+    const registry = readRegistry(projectRoot);
+    assert.deepEqual(registry.installations["codeblock-mp"].placedDirs, []);
+    assert.deepEqual(registry.installations["codeblock-mp"].commands, ["setup"]);
+  } finally {
+    cleanup(tmpDir);
+  }
 });

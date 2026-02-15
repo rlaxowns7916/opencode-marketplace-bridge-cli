@@ -18,6 +18,8 @@ const {
   filterMdContent,
   findReferencedDirs,
   findOpencodePluginReferencedDirs,
+  extractFileReferences,
+  buildDependencyGraph,
 } = require("../lib/reference-scanner");
 const { readMarkerOwner, writeMarker } = require("../lib/ownership");
 const { resolveSource, parseMarketplace } = require("../lib/marketplace");
@@ -129,6 +131,8 @@ module.exports = {
   filterMdContent,
   findReferencedDirs,
   findOpencodePluginReferencedDirs,
+  extractFileReferences,
+  buildDependencyGraph,
   transformContent,
   readMarkerOwner,
   writeMarker,
