@@ -1,148 +1,175 @@
 # opencode-marketplace-bridge-cli
 
-Claude Code 마켓플레이스/플러그인 포맷을 OpenCode가 인식할 수 있는 형태로 변환해 설치하는 브릿지 CLI입니다.
+`opencode-marketplace-bridge-cli`(실행 명령: `ombc`)는 Claude Code marketplace/plugin 포맷을 OpenCode에서 바로 사용할 수 있도록 설치해주는 브릿지 CLI입니다.
 
-핵심은 "이 저장소 자체"보다도, 임의의 Claude Code 마켓플레이스 소스를 받아 OpenCode 디스커버리 경로(`.opencode/skills`, `.opencode/commands`, `.opencode/agents`)에 배치 가능하게 만드는 것입니다.
+이 도구는 `.claude-plugin/marketplace.json`을 기준으로 플러그인을 해석하고, OpenCode 디스커버리 경로에 필요한 파일을 배치한 뒤 설치 소유권을 레지스트리로 관리합니다.
 
-## 이 프로젝트가 하는 일
+## 목차
 
-`npx opencode-marketplace-bridge-cli install <source>` 실행 시:
+- [프로젝트 목적](#프로젝트-목적)
+- [요구 사항](#요구-사항)
+- [설치](#설치)
+- [사용 방법](#사용-방법)
+- [명령어 레퍼런스](#명령어-레퍼런스)
+- [동작 보장 사항](#동작-보장-사항)
+- [콘텐츠 정규화 규칙](#콘텐츠-정규화-규칙)
+- [라이선스](#라이선스)
 
-1. `<source>`의 `.claude-plugin/marketplace.json`을 읽어 플러그인 정보를 파싱
-2. 플러그인 루트의 `skills/`, `commands/`, `agents/`에서 참조하는 디렉토리만 스마트 캐시
-3. `.md` 콘텐츠를 OpenCode 호환 형태로 변환
-   - 경로 리라이트
-   - `tools` 필드 정규화
-   - `model` 필드 정규화
-4. 변환된 파일을 `.opencode/` 디스커버리 경로에 설치
-5. 설치 이력을 `.opencode` 레지스트리에 기록
+## 프로젝트 목적
 
-## 용어 정리
+Claude Code와 OpenCode는 플러그인 디스커버리 방식이 다릅니다.
 
-| 용어 | 의미 |
+이 CLI는 그 차이를 연결하기 위해 다음을 수행합니다.
+
+- marketplace 소스 해석(GitHub shorthand, Git URL, 로컬 경로)
+- OpenCode 디스커버리 경로로 skills/commands/agents 설치
+- 문서에서 실제로 참조하는 디렉토리만 선별 배치
+- 설치 소유권 레지스트리 관리(재설치/삭제 안정성 확보)
+
+## 요구 사항
+
+- Node.js `>= 18.0.0`
+
+## 설치
+
+권장 방식(전역 설치):
+
+```bash
+npm install -g opencode-marketplace-bridge-cli
+```
+
+설치 후 `ombc` 명령을 바로 사용할 수 있습니다.
+
+```bash
+ombc --help
+```
+
+`npx` 실행도 가능하지만, 반복 사용 환경에서는 전역 설치를 권장합니다.
+
+## 사용 방법
+
+GitHub shorthand 설치:
+
+```bash
+ombc install owner/repo
+```
+
+특정 plugin만 설치:
+
+```bash
+ombc install owner/repo plugin-name
+```
+
+다른 marketplace 소유 파일 덮어쓰기(`--force`):
+
+```bash
+ombc install owner/repo --force
+```
+
+설치 제거:
+
+```bash
+ombc uninstall marketplace-name
+```
+
+설치 목록 조회:
+
+```bash
+ombc list
+```
+
+## 명령어 레퍼런스
+
+```bash
+ombc install <source> [plugin] [--force]
+ombc uninstall <marketplace-name>
+ombc list
+```
+
+### `source` 지원 형식
+
+| 입력 | 해석 방식 |
 |---|---|
-| Marketplace | `.claude-plugin/marketplace.json`을 가진 상위 레포 |
-| Plugin | marketplace의 `plugins[]` 항목 하나 (`name`, `source`) |
-| Bridge CLI | 위 Claude Code 포맷을 OpenCode 설치 구조로 변환/설치하는 도구 |
+| `owner/repo` | `https://github.com/owner/repo.git`로 shallow clone |
+| `https://...` | 해당 URL clone |
+| `git@...` | 해당 URL clone |
+| 로컬 경로 | clone 없이 직접 사용 |
 
-## 빠른 시작 (OpenCode)
+## 동작 보장 사항
 
-```bash
-npx opencode-marketplace-bridge-cli install <owner>/<marketplace-repo>
+### 설치 경로
+
+`ombc install <source>` 실행 시:
+
+- skills -> `.opencode/skills/<skill>/`
+- commands -> `.opencode/commands/<command>.md`
+- agents -> `.opencode/agents/<agent>.md`
+- 일반 참조 디렉토리 -> plugin source 기준 상대 경로 그대로
+- `.opencode/plugins/<bundle>/<dir>/...` 참조 -> `.opencode/plugins/<bundle>/<dir>/`
+
+### 소유권 모델
+
+- skills/참조 디렉토리: `.ombc-managed` marker 기반
+- commands/agents: 레지스트리 소유권 기반
+- 설치 레지스트리: `.opencode/.ombc-registry.json`
+
+### 충돌 정책
+
+- 사용자 파일(소유권 정보 없음)은 덮어쓰지 않습니다.
+- 다른 marketplace 소유 파일은 기본적으로 건너뜁니다.
+- `--force`는 다른 marketplace 소유 파일만 덮어쓸 수 있습니다.
+- `--force`를 사용해도 사용자 파일은 보호됩니다.
+
+### 재설치/삭제 동작
+
+- 재설치는 멱등(idempotent)하게 동작하며 기존 관리 산출물을 안전하게 교체합니다.
+- 레거시 캐시 경로(`.opencode/plugins/cache/...`)가 있으면 자동 정리합니다.
+- `ombc uninstall <name>`은 `<name>`이 소유한 항목만 제거하고 빈 상위 디렉토리를 정리합니다.
+- 미설치 대상 uninstall은 경고 메시지 출력 후 종료 코드 0으로 종료합니다.
+
+## 콘텐츠 정규화 규칙
+
+문서 본문 경로는 리라이트하지 않고 frontmatter만 정규화합니다.
+
+### `tools` 정규화
+
+입력 예시:
+
+- `tools: ["Read", "Grep"]`
+- `tools: Read, Grep`
+
+출력:
+
+```yaml
+tools:
+  read: true
+  grep: true
 ```
 
-자주 쓰면 global 설치 후 `ombc` 명령으로 실행할 수 있습니다.
+### `model` 정규화
 
-```bash
-npm i -g opencode-marketplace-bridge-cli
-ombc install <owner>/<marketplace-repo>
-```
+- `model: sonnet` -> `anthropic/claude-sonnet-4-5`
+- `model: opus` -> `anthropic/claude-opus-4-5`
+- `model: haiku` -> `anthropic/claude-haiku-4-5`
 
-### 지원하는 source 형식
+`anthropic/...` 같은 provider/model 형식은 그대로 유지합니다.
 
-| 입력 | 해석 |
-|---|---|
-| `owner/repo` | `https://github.com/owner/repo.git` |
-| `https://github.com/...` | 그대로 clone |
-| `/path/to/local` | clone 없이 로컬 경로 사용 |
+### 참조 스캔 규칙
 
-### CLI 명령
+스캔 대상:
 
-```bash
-ombc install <source>            # marketplace 전체 설치
-ombc install <source> <plugin>   # 특정 plugin만 설치
-ombc uninstall <name>            # 설치된 marketplace 제거
-ombc list                        # 설치된 marketplace 목록
-```
+- `skills/`
+- `commands/`
+- `agents/`
 
-### 충돌 처리 옵션
+노이즈로 간주되어 제외되는 라인:
 
-```bash
-ombc install <source> --force
-```
-
-- `--force`는 "다른 marketplace가 소유한" 동명 파일만 덮어쓸 수 있습니다.
-- 사용자가 직접 만든 파일(관리 마커/레지스트리 미추적)은 항상 보호됩니다.
-
-## 설치/재설치/삭제 동작
-
-### install (최초)
-
-- 캐시: `.opencode/plugins/cache/<marketplace>/`
-- 스킬: `.opencode/skills/<skill>/SKILL.md` + managed marker
-- 커맨드: `.opencode/commands/<cmd>.md`
-- 에이전트: `.opencode/agents/<agent>.md`
-- 레지스트리: `.opencode` 내부 registry file
-
-### install (재실행, 멱등)
-
-- 같은 marketplace 재설치 시:
-  - 기존 관리 대상 스킬/커맨드/에이전트 정리
-  - 캐시 교체
-  - 다시 설치
-- 사용자 관리 파일은 보존
-
-### uninstall
-
-- 레지스트리 기준으로 해당 marketplace가 소유한 설치물만 삭제
-- 사용자 파일은 보존
-- 미설치 대상 uninstall은 에러가 아니라 idempotent 동작(종료 코드 0)
-
-## 변환 규칙
-
-### 1) 스마트 캐시 (참조 기반)
-
-전체 플러그인을 복사하지 않고, `.md`에서 실제로 참조된 상위 디렉토리만 캐시에 복사합니다.
-
-- 입력 스캔 대상: `skills/`, `commands/`, `agents/`의 `.md`
-- 무조건 제외: `.git`, `.github`, `.claude`, `node_modules`, `.DS_Store`, `skills`, `commands`, `agents`
-- 노이즈 필터: 코드블록/트리다이어그램/테이블/주석/URL/`~/` 경로
-
-### 2) 경로 리라이트
-
-예:
-
-- `rules/common/review-baseline.md`
-  -> `.opencode/plugins/cache/<marketplace>/rules/common/review-baseline.md`
-
-리라이트 제외:
-
-- URL 내부 경로
-- 이미 `.opencode/` prefix가 있는 경로
-
-### 3) frontmatter 정규화
-
-- `tools: ["Read", "Grep"]` 또는 `tools: Read, Grep`
-  ->
-  ```yaml
-  tools:
-    read: true
-    grep: true
-  ```
-
-- `model: sonnet|opus|haiku`
-  -> `anthropic/claude-sonnet-4-5`, `anthropic/claude-opus-4-5`, `anthropic/claude-haiku-4-5`
-
-## Tool-only 프로젝트
-
-이 저장소는 marketplace 콘텐츠 저장소가 아니라 브릿지 도구 자체에 집중합니다.
-
-- 런타임에 필요한 것은 `bin/cli.js`와 npm 메타데이터입니다.
-- marketplace 샘플 데이터는 저장소 루트가 아닌 테스트 fixture에서만 관리합니다.
-
-## 검증
-
-```bash
-npm test
-```
-
-- `node --test` 기반 CLI 테스트 통과를 기준으로 동작을 검증합니다.
-
-## 제약 사항
-
-- OpenCode는 고정 디스커버리 경로만 스캔하므로 파일이 해당 경로에 물리적으로 존재해야 합니다.
-- Claude Code는 캐시 업데이트를 자동 반영하지 않으므로 `/plugin update`가 필요할 수 있습니다.
-- MCP 의존 스킬은 설치를 "안내"할 수는 있어도 강제할 수는 없습니다.
+- fenced code block
+- tree diagram
+- markdown table row
+- comment line (`# ...`, `// ...`)
+- URL 포함 라인
+- `~/` 포함 라인
 
 ## 라이선스
 
