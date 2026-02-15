@@ -13,6 +13,7 @@
 - [명령어 레퍼런스](#명령어-레퍼런스)
 - [동작 보장 사항](#동작-보장-사항)
 - [콘텐츠 정규화 규칙](#콘텐츠-정규화-규칙)
+- [의존성 그래프](#의존성-그래프)
 - [라이선스](#라이선스)
 
 ## 프로젝트 목적
@@ -104,12 +105,12 @@ ombc list
 - skills -> `.opencode/skills/<skill>/`
 - commands -> `.opencode/commands/<command>.md`
 - agents -> `.opencode/agents/<agent>.md`
-- 일반 참조 디렉토리 -> plugin source 기준 상대 경로 그대로
-- `.opencode/plugins/<bundle>/<dir>/...` 참조 -> `.opencode/plugins/<bundle>/<dir>/`
+- 참조된 파일 -> `.opencode/<pluginName>/` 하위에 선별 복사
+- 의존성 그래프(BFS)가 skills/commands/agents에서 시작하여 재귀적으로 참조를 추적하고, 실제로 참조된 파일만 복사합니다. 참조되지 않은 파일/디렉토리는 복사하지 않습니다.
 
 ### 소유권 모델
 
-- skills/참조 디렉토리: `.ombc-managed` marker 기반
+- skills/참조 파일(`.opencode/<pluginName>/`): `.ombc-managed` marker 기반
 - commands/agents: 레지스트리 소유권 기반
 - 설치 레지스트리: `.opencode/.ombc-registry.json`
 
@@ -129,7 +130,15 @@ ombc list
 
 ## 콘텐츠 정규화 규칙
 
-문서 본문 경로는 리라이트하지 않고 frontmatter만 정규화합니다.
+frontmatter 필드를 정규화하고, 문서 본문의 파일 경로를 `.opencode/<pluginName>/` 기준으로 재작성합니다.
+
+### 본문 경로 재작성
+
+참조 파일이 `.opencode/<pluginName>/`에 복사되므로, 문서 본문의 경로도 일관되게 재작성합니다.
+
+- `@plugins/<bundle>/rules/file.md` → `@.opencode/<pluginName>/rules/file.md`
+- `rules/file.md` (상대 경로) → `.opencode/<pluginName>/rules/file.md`
+- 이미 `.opencode/` 접두사가 있는 경로는 이중 변환하지 않습니다.
 
 ### `tools` 정규화
 
@@ -164,12 +173,36 @@ tools:
 
 노이즈로 간주되어 제외되는 라인:
 
-- fenced code block
-- tree diagram
-- markdown table row
-- comment line (`# ...`, `// ...`)
-- URL 포함 라인
+- fenced code block (중첩 코드 펜스 — 여는 backtick 수 이상의 닫는 backtick만 매칭)
+- tree diagram (`├──`, `└──` 등)
+- markdown table row (`|`로 시작)
+- heading (`# ...`, `## ...`, `### ...` 등 모든 레벨)
+- comment (`// ...`)
+- URL 포함 라인 (`https://...`, `http://...`)
 - `~/` 포함 라인
+
+## 의존성 그래프
+
+`ombc install`은 BFS 기반 재귀 참조 추적으로 실제 필요한 파일만 선별 복사합니다.
+
+### 동작 방식
+
+1. **시드 수집**: `skills/`, `commands/`, `agents/` 디렉토리의 스캔 가능 파일을 큐에 추가
+2. **BFS 탐색**: 큐에서 파일을 꺼내 참조 경로를 추출하고, 참조된 파일/디렉토리를 다시 큐에 추가
+3. **선별 복사**: 탐색이 완료되면 도달 가능한(reachable) 파일만 `.opencode/<pluginName>/`에 복사
+
+### 스캔 대상 확장자
+
+재귀 스캔은 `SCANNABLE_EXTENSIONS`에 해당하는 파일만 수행합니다.
+
+- `.md`
+- `.txt`
+
+해당 확장자가 아닌 파일은 참조되면 복사하지만, 그 내부를 스캔하지는 않습니다.
+
+### 노이즈 필터링
+
+참조 추출 전에 각 파일 내용에서 노이즈 라인을 제거합니다. 제거 대상은 [참조 스캔 규칙](#참조-스캔-규칙)을 참고하세요.
 
 ## 라이선스
 
