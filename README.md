@@ -165,6 +165,8 @@ tools:
 
 ### 참조 스캔 규칙
 
+참조 스캔은 Markdown 파서 기반(AST/토큰)으로 문서 구조를 해석한 뒤, 허용된 텍스트 노드에서만 경로를 추출합니다.
+
 스캔 대상:
 
 - `skills/`
@@ -173,9 +175,9 @@ tools:
 
 노이즈로 간주되어 제외되는 라인:
 
-- fenced code block (중첩 코드 펜스 — 여는 backtick 수 이상의 닫는 backtick만 매칭)
+- fenced code block (backtick/tilde 코드 펜스 포함)
 - tree diagram (`├──`, `└──` 등)
-- markdown table row (`|`로 시작)
+- markdown table row (GFM 테이블, leading `|` 없는 행 포함)
 - heading (`# ...`, `## ...`, `### ...` 등 모든 레벨)
 - comment (`// ...`)
 - URL 포함 라인 (`https://...`, `http://...`)

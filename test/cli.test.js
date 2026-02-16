@@ -2708,6 +2708,33 @@ test("filterMdContent handles nested code fences", () => {
   assert.doesNotMatch(result, /inner content/);
 });
 
+test("filterMdContent filters tilde code fences", () => {
+  const input = [
+    "outside before rules/visible-before.md",
+    "~~~bash",
+    "cat rules/leaked.md",
+    "~~~",
+    "outside after rules/visible-after.md",
+  ].join("\n");
+  const result = filterMdContent(input);
+  assert.match(result, /rules\/visible-before\.md/);
+  assert.match(result, /rules\/visible-after\.md/);
+  assert.doesNotMatch(result, /rules\/leaked\.md/);
+});
+
+test("filterMdContent filters GFM table rows without leading pipes", () => {
+  const input = [
+    "name | path",
+    "--- | ---",
+    "rule | rules/table-only.md",
+    "",
+    "normal text with rules/visible.md",
+  ].join("\n");
+  const result = filterMdContent(input);
+  assert.match(result, /rules\/visible\.md/);
+  assert.doesNotMatch(result, /rules\/table-only\.md/);
+});
+
 // --- copyReachableFiles edge case ---
 
 test("install with zero reachable files records empty placedDirs", async () => {
