@@ -2504,6 +2504,29 @@ test("buildDependencyGraph finds direct file references", () => {
   }
 });
 
+test("buildDependencyGraph tracks arbitrary top-level doc dirs", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "example"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read example/docs.md and /example/sample.md.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "example", "docs.md"), "doc a", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "example", "sample.md"), "doc b", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("example/docs.md"), true);
+    assert.equal(reachableFiles.has("example/sample.md"), true);
+    assert.equal(reachableDirs.has("example"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 test("buildDependencyGraph finds leading-slash file references", () => {
   const tmpDir = makeTempDir();
   try {
