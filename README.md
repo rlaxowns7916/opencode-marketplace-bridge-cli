@@ -79,12 +79,19 @@ ombc uninstall marketplace-name
 ombc list
 ```
 
+설치된 marketplace 일괄 업데이트:
+
+```bash
+ombc update
+```
+
 ## 명령어 레퍼런스
 
 ```bash
 ombc install <source> [plugin] [--force]
 ombc uninstall <marketplace-name>
 ombc list
+ombc update [--force]
 ```
 
 ### `source` 지원 형식

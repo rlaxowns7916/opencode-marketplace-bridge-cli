@@ -25,7 +25,7 @@ const {
   install,
   uninstall,
   list,
-  LEGACY_CACHE_DIR,
+  update,
 } = require(cliPath);
 
 function makeTempDir() {
@@ -1939,6 +1939,129 @@ test("list shows empty message when nothing installed", () => {
   }
 });
 
+test("update refreshes installed marketplaces and preserves installedAt", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    commands: { hello: "hello-v1" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const commandPath = path.join(projectRoot, ".opencode", "commands", "hello.md");
+    assert.equal(fs.readFileSync(commandPath, "utf8"), "hello-v1");
+
+    const beforeEntry = readRegistry(projectRoot).installations["mock-marketplace"];
+
+    fs.writeFileSync(
+      path.join(marketplaceDir, "commands", "hello.md"),
+      "hello-v2",
+      "utf8",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const summary = await update(projectRoot);
+
+    assert.deepEqual(summary.failed, []);
+    assert.equal(summary.updated.includes("mock-marketplace"), true);
+    assert.equal(fs.readFileSync(commandPath, "utf8"), "hello-v2");
+
+    const afterEntry = readRegistry(projectRoot).installations["mock-marketplace"];
+    assert.equal(afterEntry.installedAt, beforeEntry.installedAt);
+    assert.notEqual(afterEntry.lastUpdated, beforeEntry.lastUpdated);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("update preserves plugin-filter install scope", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "multi-plugin-marketplace");
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "plugins", "plugin-a", "skills", "a-skill"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "plugins", "plugin-b", "skills", "b-skill"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({
+      name: "multi-plugin-marketplace",
+      plugins: [
+        { name: "plugin-a", source: "./plugins/plugin-a" },
+        { name: "plugin-b", source: "./plugins/plugin-b" },
+      ],
+    }),
+    "utf8",
+  );
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, "plugins", "plugin-a", "skills", "a-skill", "SKILL.md"),
+    "A skill v1",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "plugins", "plugin-b", "skills", "b-skill", "SKILL.md"),
+    "B skill v1",
+    "utf8",
+  );
+
+  try {
+    await install(marketplaceDir, "plugin-a", projectRoot);
+
+    const aSkillPath = path.join(projectRoot, ".opencode", "skills", "a-skill", "SKILL.md");
+    const bSkillDir = path.join(projectRoot, ".opencode", "skills", "b-skill");
+
+    assert.equal(fs.existsSync(aSkillPath), true);
+    assert.equal(fs.existsSync(bSkillDir), false);
+
+    fs.writeFileSync(
+      path.join(marketplaceDir, "plugins", "plugin-a", "skills", "a-skill", "SKILL.md"),
+      "A skill v2",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(marketplaceDir, "plugins", "plugin-b", "skills", "b-skill", "SKILL.md"),
+      "B skill v2",
+      "utf8",
+    );
+
+    const summary = await update(projectRoot);
+    assert.deepEqual(summary.failed, []);
+    assert.equal(summary.updated.includes("multi-plugin-marketplace"), true);
+
+    assert.equal(fs.readFileSync(aSkillPath, "utf8"), "A skill v2");
+    assert.equal(fs.existsSync(bSkillDir), false);
+
+    const entry = readRegistry(projectRoot).installations["multi-plugin-marketplace"];
+    assert.deepEqual(entry.plugins, ["plugin-a"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("update reports empty state when nothing is installed", async () => {
+  const tmpDir = makeTempDir();
+  try {
+    const originalLog = console.log;
+    const output = [];
+    console.log = (...args) => output.push(args.join(" "));
+
+    const summary = await update(tmpDir);
+
+    console.log = originalLog;
+
+    assert.deepEqual(summary, { updated: [], failed: [] });
+    assert.equal(output.length, 1);
+    assert.match(output[0], /No marketplaces installed/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 // --- CLI subprocess integration ---
 
 test("CLI install from local path works end-to-end", () => {
@@ -2007,6 +2130,39 @@ test("CLI list works end-to-end", () => {
     assert.equal(run.status, 0, `stderr: ${run.stderr}`);
     assert.match(run.stdout, /ombc-fixture/);
     assert.match(run.stdout, /Skills\s+: code-review, pr-create/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("CLI update works end-to-end", () => {
+  const tmpDir = makeTempDir();
+  const projectRoot = path.join(tmpDir, "project");
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    commands: { hello: "cli-v1" },
+  });
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    const installRun = spawnSync(process.execPath, [cliPath, "install", marketplaceDir], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    });
+    assert.equal(installRun.status, 0, `stderr: ${installRun.stderr}`);
+
+    fs.writeFileSync(path.join(marketplaceDir, "commands", "hello.md"), "cli-v2", "utf8");
+
+    const updateRun = spawnSync(process.execPath, [cliPath, "update"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    });
+
+    assert.equal(updateRun.status, 0, `stderr: ${updateRun.stderr}`);
+    assert.match(updateRun.stdout, /OMBC UPDATE REPORT/);
+    assert.match(updateRun.stdout, /Updated \(1\)/);
+
+    const commandPath = path.join(projectRoot, ".opencode", "commands", "hello.md");
+    assert.equal(fs.readFileSync(commandPath, "utf8"), "cli-v2");
   } finally {
     cleanup(tmpDir);
   }
@@ -2432,6 +2588,7 @@ test("CLI help shows --force option", () => {
   const run = spawnSync(process.execPath, [cliPath, "--help"], { encoding: "utf8" });
   assert.equal(run.status, 0);
   assert.match(run.stdout, /--force/);
+  assert.match(run.stdout, /ombc update/);
 });
 
 // --- extractFileReferences ---
