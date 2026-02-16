@@ -2879,6 +2879,57 @@ test("install recursively tracks agent-seeded graph and rewrites to .opencode", 
   }
 });
 
+test("install tracks mixed command+agent seeds with cycles and keeps root clean", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "mixed-seed-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "commands"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "agents"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "example"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "docs"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "mixed-seed-mp", plugins: [{ name: "mixed-seed-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "commands", "setup.md"), "Read /example/entry.md.", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "agents", "reviewer.md"), "Start from docs/agent-guide.md.", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "example", "entry.md"), "See docs/shared.md.", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "docs", "agent-guide.md"), "Also docs/shared.md.", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "docs", "shared.md"), "Then example/entry.md and /example/leaf.md.", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "example", "leaf.md"), "leaf", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "docs", "unused.md"), "unused", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const base = path.join(projectRoot, ".opencode", "mixed-seed-mp");
+    assert.equal(fs.existsSync(path.join(base, "example", "entry.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "docs", "agent-guide.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "docs", "shared.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "example", "leaf.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "docs", "unused.md")), false);
+
+    assert.equal(fs.existsSync(path.join(projectRoot, "example")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, "docs")), false);
+
+    const commandContent = fs.readFileSync(path.join(projectRoot, ".opencode", "commands", "setup.md"), "utf8");
+    const agentContent = fs.readFileSync(path.join(projectRoot, ".opencode", "agents", "reviewer.md"), "utf8");
+    const sharedContent = fs.readFileSync(path.join(base, "docs", "shared.md"), "utf8");
+
+    assert.match(commandContent, /\.opencode\/mixed-seed-mp\/example\/entry\.md/);
+    assert.match(agentContent, /\.opencode\/mixed-seed-mp\/docs\/agent-guide\.md/);
+    assert.match(sharedContent, /\.opencode\/mixed-seed-mp\/example\/entry\.md/);
+    assert.match(sharedContent, /\.opencode\/mixed-seed-mp\/example\/leaf\.md/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 // --- filterMdContent edge cases ---
 
 test("filterMdContent filters multi-hash headings", () => {
