@@ -43,6 +43,7 @@
     "access": "public"
   },
   "dependencies": {
+    "markdown-it": "^14.1.0",
     "simple-git": "^3.27.0"
   }
 }
