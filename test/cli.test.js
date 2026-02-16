@@ -601,6 +601,7 @@ test("transformContent rewrites relative paths with rewriteCtx", () => {
   });
   assert.match(result, /\.opencode\/my-plugin\/rules\/common\/review\.md/);
   assert.match(result, /\.opencode\/my-plugin\/rules\/common\/from-root\.md/);
+  assert.doesNotMatch(result, /\/\.opencode\/my-plugin\/rules\/common\/from-root\.md/);
   assert.match(result, /\.opencode\/my-plugin\/templates\/pr\.md/);
   // No double rewriting
   assert.doesNotMatch(result, /\.opencode\/my-plugin\/\.opencode\//);
