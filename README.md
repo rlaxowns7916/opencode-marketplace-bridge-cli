@@ -138,6 +138,7 @@ frontmatter 필드를 정규화하고, 문서 본문의 파일 경로를 `.openc
 
 - `@plugins/<bundle>/rules/file.md` → `@.opencode/<pluginName>/rules/file.md`
 - `rules/file.md` (상대 경로) → `.opencode/<pluginName>/rules/file.md`
+- `/rules/file.md` (leading slash) → `.opencode/<pluginName>/rules/file.md`
 - 이미 `.opencode/` 접두사가 있는 경로는 이중 변환하지 않습니다.
 
 ### `tools` 정규화

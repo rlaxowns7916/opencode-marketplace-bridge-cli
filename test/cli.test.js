@@ -590,6 +590,7 @@ test("transformContent applies tools normalization and model normalization", () 
 test("transformContent rewrites relative paths with rewriteCtx", () => {
   const input = [
     "Read rules/common/review.md first.",
+    "Also read /rules/common/from-root.md.",
     "Check templates/pr.md too.",
     "Already rewritten: .opencode/my-plugin/rules/file.md",
   ].join("\n");
@@ -599,6 +600,7 @@ test("transformContent rewrites relative paths with rewriteCtx", () => {
     copiedDirs: ["rules", "templates"],
   });
   assert.match(result, /\.opencode\/my-plugin\/rules\/common\/review\.md/);
+  assert.match(result, /\.opencode\/my-plugin\/rules\/common\/from-root\.md/);
   assert.match(result, /\.opencode\/my-plugin\/templates\/pr\.md/);
   // No double rewriting
   assert.doesNotMatch(result, /\.opencode\/my-plugin\/\.opencode\//);
@@ -2439,6 +2441,12 @@ test("extractFileReferences extracts bare dir/file references", () => {
   assert.deepEqual(refs.sort(), ["rules/common/review.md", "templates/pr.md"]);
 });
 
+test("extractFileReferences handles leading-slash references", () => {
+  const content = "Read /rules/common/review.md and /templates/pr.md.";
+  const refs = extractFileReferences(content, ["rules", "templates"]);
+  assert.deepEqual(refs.sort(), ["rules/common/review.md", "templates/pr.md"]);
+});
+
 test("extractFileReferences strips .opencode/<pluginName>/ prefix", () => {
   const content = "Read `.opencode/my-plugin/rules/common/review.md` first.";
   const refs = extractFileReferences(content, ["rules"]);
@@ -2483,6 +2491,27 @@ test("buildDependencyGraph finds direct file references", () => {
     fs.writeFileSync(
       path.join(tmpDir, "skills", "review", "SKILL.md"),
       "Read `rules/common/review.md` first.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "rules", "common", "review.md"), "rule content", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("rules/common/review.md"), true);
+    assert.equal(reachableDirs.has("rules"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph finds leading-slash file references", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "skills", "review"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "rules", "common"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "skills", "review", "SKILL.md"),
+      "Read `/rules/common/review.md` first.",
       "utf8",
     );
     fs.writeFileSync(path.join(tmpDir, "rules", "common", "review.md"), "rule content", "utf8");
