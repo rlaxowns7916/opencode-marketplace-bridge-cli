@@ -79,12 +79,19 @@ ombc uninstall marketplace-name
 ombc list
 ```
 
+설치된 marketplace 일괄 업데이트:
+
+```bash
+ombc update
+```
+
 ## 명령어 레퍼런스
 
 ```bash
 ombc install <source> [plugin] [--force]
 ombc uninstall <marketplace-name>
 ombc list
+ombc update [--force]
 ```
 
 ### `source` 지원 형식
@@ -138,6 +145,7 @@ frontmatter 필드를 정규화하고, 문서 본문의 파일 경로를 `.openc
 
 - `@plugins/<bundle>/rules/file.md` → `@.opencode/<pluginName>/rules/file.md`
 - `rules/file.md` (상대 경로) → `.opencode/<pluginName>/rules/file.md`
+- `/rules/file.md` (leading slash) → `.opencode/<pluginName>/rules/file.md`
 - 이미 `.opencode/` 접두사가 있는 경로는 이중 변환하지 않습니다.
 
 ### `tools` 정규화
@@ -165,6 +173,8 @@ tools:
 
 ### 참조 스캔 규칙
 
+참조 스캔은 Markdown 파서 기반(AST/토큰)으로 문서 구조를 해석한 뒤, 허용된 텍스트 노드에서만 경로를 추출합니다.
+
 스캔 대상:
 
 - `skills/`
@@ -173,9 +183,9 @@ tools:
 
 노이즈로 간주되어 제외되는 라인:
 
-- fenced code block (중첩 코드 펜스 — 여는 backtick 수 이상의 닫는 backtick만 매칭)
+- fenced code block (backtick/tilde 코드 펜스 포함)
 - tree diagram (`├──`, `└──` 등)
-- markdown table row (`|`로 시작)
+- markdown table row (GFM 테이블, leading `|` 없는 행 포함)
 - heading (`# ...`, `## ...`, `### ...` 등 모든 레벨)
 - comment (`// ...`)
 - URL 포함 라인 (`https://...`, `http://...`)

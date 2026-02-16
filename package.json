@@ -1,6 +1,6 @@
 {
   "name": "opencode-marketplace-bridge-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Bridge CLI that installs Claude Code marketplace plugins into OpenCode discovery paths",
   "author": "kimtaejun",
   "license": "MIT",
@@ -43,6 +43,7 @@
     "access": "public"
   },
   "dependencies": {
+    "markdown-it": "^14.1.0",
     "simple-git": "^3.27.0"
   }
 }
