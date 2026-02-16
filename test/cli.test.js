@@ -2527,6 +2527,64 @@ test("buildDependencyGraph tracks arbitrary top-level doc dirs", () => {
   }
 });
 
+test("buildDependencyGraph follows references seeded from commands", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "commands"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "example"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "templates"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "commands", "setup.md"),
+      "Read /example/docs.md first.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "example", "docs.md"),
+      "Then follow templates/checklist.md.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "templates", "checklist.md"), "check", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("example/docs.md"), true);
+    assert.equal(reachableFiles.has("templates/checklist.md"), true);
+    assert.equal(reachableDirs.has("example"), true);
+    assert.equal(reachableDirs.has("templates"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("buildDependencyGraph follows references seeded from agents", () => {
+  const tmpDir = makeTempDir();
+  try {
+    fs.mkdirSync(path.join(tmpDir, "agents"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "docs"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "example"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, "agents", "reviewer.md"),
+      "Use docs/guide.md.",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "docs", "guide.md"),
+      "And /example/sample.md.",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(tmpDir, "example", "sample.md"), "sample", "utf8");
+
+    const { reachableFiles, reachableDirs } = buildDependencyGraph(tmpDir);
+    assert.equal(reachableFiles.has("docs/guide.md"), true);
+    assert.equal(reachableFiles.has("example/sample.md"), true);
+    assert.equal(reachableDirs.has("docs"), true);
+    assert.equal(reachableDirs.has("example"), true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 test("buildDependencyGraph finds leading-slash file references", () => {
   const tmpDir = makeTempDir();
   try {
@@ -2716,6 +2774,106 @@ test("install recursively tracks references and copies only reachable files", as
       "utf8",
     );
     assert.match(skillContent, /\.opencode\/recursive-mp\/rules\/common\/review\.md/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install recursively tracks command-seeded graph and rewrites to .opencode", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "command-seed-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "commands"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "example"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "templates"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "command-seed-mp", plugins: [{ name: "command-seed-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "commands", "setup.md"),
+    "Read /example/docs.md first.",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "example", "docs.md"),
+    "Then use templates/checklist.md.",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "templates", "checklist.md"), "checklist", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "templates", "unused.md"), "unused", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const base = path.join(projectRoot, ".opencode", "command-seed-mp");
+    const commandFile = path.join(projectRoot, ".opencode", "commands", "setup.md");
+
+    assert.equal(fs.existsSync(path.join(base, "example", "docs.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "templates", "checklist.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "templates", "unused.md")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, "example")), false);
+
+    const commandContent = fs.readFileSync(commandFile, "utf8");
+    assert.match(commandContent, /\.opencode\/command-seed-mp\/example\/docs\.md/);
+
+    const docContent = fs.readFileSync(path.join(base, "example", "docs.md"), "utf8");
+    assert.match(docContent, /\.opencode\/command-seed-mp\/templates\/checklist\.md/);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install recursively tracks agent-seeded graph and rewrites to .opencode", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "agent-seed-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "agents"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "example"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "agent-seed-mp", plugins: [{ name: "agent-seed-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "agents", "reviewer.md"),
+    "Review docs/guide.md before responding.",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "docs", "guide.md"),
+    "Also check /example/sample.md.",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "example", "sample.md"), "sample", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "example", "unused.md"), "unused", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const base = path.join(projectRoot, ".opencode", "agent-seed-mp");
+    const agentFile = path.join(projectRoot, ".opencode", "agents", "reviewer.md");
+
+    assert.equal(fs.existsSync(path.join(base, "docs", "guide.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "example", "sample.md")), true);
+    assert.equal(fs.existsSync(path.join(base, "example", "unused.md")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, "docs")), false);
+
+    const agentContent = fs.readFileSync(agentFile, "utf8");
+    assert.match(agentContent, /\.opencode\/agent-seed-mp\/docs\/guide\.md/);
+
+    const guideContent = fs.readFileSync(path.join(base, "docs", "guide.md"), "utf8");
+    assert.match(guideContent, /\.opencode\/agent-seed-mp\/example\/sample\.md/);
   } finally {
     cleanup(tmpDir);
   }
