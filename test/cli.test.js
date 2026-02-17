@@ -100,6 +100,20 @@ function createMockMarketplace(tmpDir, opts = {}) {
     }
   }
 
+  // Optionally add hooks (plugin entry files)
+  if (opts.hooks) {
+    for (const [fileName, content] of Object.entries(opts.hooks)) {
+      const hookDir = fileName.startsWith("plugins/") ? "plugins" : "plugin";
+      const baseName = fileName.replace(/^(?:plugin|plugins)\//, "");
+      fs.mkdirSync(path.join(marketplaceDir, hookDir), { recursive: true });
+      fs.writeFileSync(
+        path.join(marketplaceDir, hookDir, baseName),
+        content,
+        "utf8",
+      );
+    }
+  }
+
   return marketplaceDir;
 }
 
@@ -141,6 +155,15 @@ function createSecondMarketplace(tmpDir, opts = {}) {
     fs.mkdirSync(path.join(marketplaceDir, "agents"), { recursive: true });
     for (const [name, content] of Object.entries(opts.agents)) {
       fs.writeFileSync(path.join(marketplaceDir, "agents", `${name}.md`), content, "utf8");
+    }
+  }
+
+  if (opts.hooks) {
+    for (const [fileName, content] of Object.entries(opts.hooks)) {
+      const hookDir = fileName.startsWith("plugins/") ? "plugins" : "plugin";
+      const baseName = fileName.replace(/^(?:plugin|plugins)\//, "");
+      fs.mkdirSync(path.join(marketplaceDir, hookDir), { recursive: true });
+      fs.writeFileSync(path.join(marketplaceDir, hookDir, baseName), content, "utf8");
     }
   }
 
@@ -3250,6 +3273,296 @@ test("install source ./ marketplace with code-block-only refs copies nothing ext
     const registry = readRegistry(projectRoot);
     assert.deepEqual(registry.installations["codeblock-mp"].placedDirs, []);
     assert.deepEqual(registry.installations["codeblock-mp"].commands, ["setup"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+// --- Hooks (plugin entry files) ---
+
+test("install copies hook files from plugin/ to .opencode/plugins/", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/init.ts": "export default function init() {}" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const hookPath = path.join(projectRoot, ".opencode", "plugins", "init.ts");
+    assert.equal(fs.existsSync(hookPath), true);
+    assert.equal(fs.readFileSync(hookPath, "utf8"), "export default function init() {}");
+
+    const registry = readRegistry(projectRoot);
+    assert.deepEqual(registry.installations["mock-marketplace"].hooks, ["init.ts"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install copies hook files from plugins/ to .opencode/plugins/", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugins/setup.js": "module.exports = {}" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const hookPath = path.join(projectRoot, ".opencode", "plugins", "setup.js");
+    assert.equal(fs.existsSync(hookPath), true);
+    assert.equal(fs.readFileSync(hookPath, "utf8"), "module.exports = {}");
+
+    const registry = readRegistry(projectRoot);
+    assert.deepEqual(registry.installations["mock-marketplace"].hooks, ["setup.js"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install merges hooks from both plugin/ and plugins/ directories", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: {
+      "plugin/a.ts": "// a",
+      "plugins/b.js": "// b",
+    },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "a.ts")), true);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "b.js")), true);
+
+    const registry = readRegistry(projectRoot);
+    const hooks = registry.installations["mock-marketplace"].hooks;
+    assert.deepEqual(hooks.sort(), ["a.ts", "b.js"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install copies hook files without content transform", async () => {
+  const tmpDir = makeTempDir();
+  const content = 'import { foo } from "./bar";\n// Read `rules/test.md`\nexport { foo };';
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/hook.ts": content },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    const hookPath = path.join(projectRoot, ".opencode", "plugins", "hook.ts");
+    assert.equal(fs.readFileSync(hookPath, "utf8"), content);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("uninstall removes hook files", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/init.ts": "// init", "plugins/setup.js": "// setup" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "init.ts")), true);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "setup.js")), true);
+
+    uninstall("mock-marketplace", projectRoot);
+
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "init.ts")), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "setup.js")), false);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install skips user-managed hook files", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/my-hook.ts": "marketplace hook" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    const pluginsDir = path.join(projectRoot, ".opencode", "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginsDir, "my-hook.ts"), "user hook\n", "utf8");
+
+    await install(marketplaceDir, null, projectRoot);
+
+    const content = fs.readFileSync(path.join(pluginsDir, "my-hook.ts"), "utf8");
+    assert.equal(content, "user hook\n");
+
+    const registry = readRegistry(projectRoot);
+    assert.equal(
+      (registry.installations["mock-marketplace"].hooks || []).includes("my-hook.ts"),
+      false,
+    );
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install skips hooks owned by another marketplace (default)", async () => {
+  const tmpDir = makeTempDir();
+  const firstDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/shared.ts": "first hook" },
+  });
+  const secondDir = createSecondMarketplace(tmpDir, {
+    hooks: { "plugin/shared.ts": "second hook" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(firstDir, null, projectRoot);
+    await install(secondDir, null, projectRoot);
+
+    const content = fs.readFileSync(
+      path.join(projectRoot, ".opencode", "plugins", "shared.ts"),
+      "utf8",
+    );
+    assert.equal(content, "first hook");
+
+    const registry = readRegistry(projectRoot);
+    assert.equal(
+      (registry.installations["second-marketplace"].hooks || []).includes("shared.ts"),
+      false,
+    );
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("install --force overwrites hooks owned by another marketplace", async () => {
+  const tmpDir = makeTempDir();
+  const firstDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/shared.ts": "first hook" },
+  });
+  const secondDir = createSecondMarketplace(tmpDir, {
+    hooks: { "plugin/shared.ts": "second hook" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(firstDir, null, projectRoot);
+    await install(secondDir, null, projectRoot, { force: true });
+
+    const content = fs.readFileSync(
+      path.join(projectRoot, ".opencode", "plugins", "shared.ts"),
+      "utf8",
+    );
+    assert.equal(content, "second hook");
+
+    const registry = readRegistry(projectRoot);
+    assert.deepEqual(registry.installations["second-marketplace"].hooks, ["shared.ts"]);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("reinstall replaces hook files", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = createMockMarketplace(tmpDir, {
+    hooks: { "plugin/init.ts": "v1 hook" },
+  });
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    // Modify source
+    fs.writeFileSync(
+      path.join(marketplaceDir, "plugin", "init.ts"),
+      "v2 hook",
+      "utf8",
+    );
+
+    // Reinstall
+    await install(marketplaceDir, null, projectRoot);
+
+    const content = fs.readFileSync(
+      path.join(projectRoot, ".opencode", "plugins", "init.ts"),
+      "utf8",
+    );
+    assert.equal(content, "v2 hook");
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test("unreferenced plugin/ and plugins/ are not content-copied but hooks install flat", async () => {
+  const tmpDir = makeTempDir();
+  const marketplaceDir = path.join(tmpDir, "skip-mp");
+  fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "skills", "test-skill"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "plugin"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "plugins"), { recursive: true });
+  fs.mkdirSync(path.join(marketplaceDir, "rules"), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({ name: "skip-mp", plugins: [{ name: "skip-mp", source: "./" }] }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(marketplaceDir, "skills", "test-skill", "SKILL.md"),
+    "Read `rules/guide.md`.",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(marketplaceDir, "rules", "guide.md"), "guide content", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "plugin", "entry.ts"), "// entry", "utf8");
+  fs.writeFileSync(path.join(marketplaceDir, "plugins", "extra.js"), "// extra", "utf8");
+
+  const projectRoot = path.join(tmpDir, "project");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    await install(marketplaceDir, null, projectRoot);
+
+    // Referenced files are copied
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "skip-mp", "rules", "guide.md")),
+      true,
+    );
+
+    // plugin/ and plugins/ not referenced from skills → not in dependency graph → not content-copied
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "skip-mp", "plugin")),
+      false,
+    );
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "skip-mp", "plugins")),
+      false,
+    );
+
+    // But hooks are installed flat in .opencode/plugins/
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "entry.ts")),
+      true,
+    );
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, ".opencode", "plugins", "extra.js")),
+      true,
+    );
   } finally {
     cleanup(tmpDir);
   }
